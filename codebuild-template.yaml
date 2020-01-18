@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CodeBuild project for IAAC'
+Parameters:
+  Project:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9-]{3,24}"
+  Product:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9-]{3,24}"
+  Environment:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9-]{3,24}"
+Resources:
+  CodeBuildProject:
+    Type: "AWS::CodeBuild::Project"
+    DependsOn:
+      - CodeBuildServiceRole
+    Properties:
+      Name: !Sub ${Project}-CodeBuild
+#      arn: "arn:aws:codebuild:eu-west-1:209544401946:project/IACAC-CodeBuild"
+      Source: 
+        Type: CODEPIPELINE
+        InsecureSsl: false 
+      Artifacts: 
+        Type: CODEPIPELINE
+        Name: !Ref Project
+        Packaging: NONE
+        EncryptionDisabled: false
+      Cache: 
+        Type: NO_CACHE
+      Environment: 
+        Type: LINUX_CONTAINER
+        Image: "aws/codebuild/amazonlinux2-x86_64-standard:2.0"
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+        - Type: PLAINTEXT
+          Name: PROJECT
+          Value: !Ref Project
+        - Type: PLAINTEXT
+          Name: ENVIRONMENT
+          Value: !Ref Environment
+        PrivilegedMode: false
+        ImagePullCredentialsType: CODEBUILD
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480
+      #EncryptionKey: "arn:aws:kms:eu-west-1:209544401946:alias/aws/s3"
+      Tags: [] 
+      LogsConfig: 
+        CloudWatchLogs: 
+          Status: ENABLED
+          GroupName: IACAC
+          StreamName: build
+      S3Logs: 
+        Status: DISABLED
+        EncryptionDisabled: false
+
+  CodeBuildServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - 'codebuild.amazonaws.com'
+          Action:
+          - 'sts:AssumeRole'
+      Path: /service-role/
+      Policies:
+        - PolicyName: logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Resource:
+              - !Sub arn:aws:logs:eu-west-1:${AWS::AccountId}:log-group:/aws/codebuild/${Project}
+              - !Sub arn:aws:logs:eu-west-1:${AWS::AccountId}:log-group:/aws/codebuild/${Project}:*
+              Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            - Effect: Allow
+              Resource:
+              - arn:aws:s3:::*
+              - arn:aws:s3:::*/*
+              Action: s3:*
+            - Effect: Allow
+              Action:
+              - codebuild:CreateReportGroup
+              - codebuild:CreateReport
+              - codebuild:UpdateReport
+              - codebuild:BatchPutTestCases
+              Resource:
+              - !Sub arn:aws:codebuild:eu-west-1:${AWS::AccountId}:report-group/${Project}-*
+            - Effect: Allow
+              Action:
+              - ssm:DescribeAssociation
+              - ssm:GetDeployablePatchSnapshotForInstance
+              - ssm:GetDocument
+              - ssm:DescribeDocument
+              - ssm:GetManifest
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:ListAssociations
+              - ssm:ListInstanceAssociations
+              - ssm:PutInventory
+              - ssm:PutComplianceItems
+              - ssm:PutConfigurePackageResult
+              - ssm:UpdateAssociationStatus
+              - ssm:UpdateInstanceAssociationStatus
+              - ssm:UpdateInstanceInformation
+              Resource: "*"
+            - Effect: Allow
+              Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              Resource: "*"
+            - Effect: Allow
+              Action:
+              - ec2messages:AcknowledgeMessage
+              - ec2messages:DeleteMessage
+              - ec2messages:FailMessage
+              - ec2messages:GetEndpoint
+              - ec2messages:GetMessages
+              - ec2messages:SendReply
+              Resource: "*"

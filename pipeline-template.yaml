@@ -1,0 +1,366 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: 'Continuous Delivery pipeline'
+Parameters:
+  Product:
+    Description: 'The product name is combined with the environment name to 
+      generate the stack name and subdomain: <product name>-<environment>
+      The subdomain apears before .iaas-platform.axa in the gateway URL,
+      eg: uber-income-protection-dev.iaas-platform.axa'
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9-]{1,24}"
+    ConstraintDescription: Product name must be between 1 and 24 characters
+  Environment:
+    Description: 'The environment is combined with the product name to 
+      generate the stack name and subdomain: <product name>-<environment>
+      Typical environment names are dev, staging, prod...'
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9-]{1,10}"
+    ConstraintDescription: Environment name must be between 1 and 10 characters
+  RepositoryType:
+    Description: 'CodeCommit or Git'
+    Type: String
+    Default: Git
+    AllowedValues: 
+      - CodeCommit
+      - Git
+    ConstraintDescription: RepositoryType must be CodeCommit or Git
+  Repository:
+    Description: 'The CodeCommit or Git repository.'
+    Type: String
+    Default: IACAC
+    AllowedPattern: "^[A-Za-z0-9-.]{1,30}"
+    ConstraintDescription: Repository must be between 1 and 30 characters
+  Branch:
+    Description: 'The Branch of the CodeCommit or Git repository.'
+    Type: String
+    Default: master
+    AllowedPattern: "^[A-Za-z0-9-]{1,30}"
+    ConstraintDescription: Branch name must be between 1 and 30 characters
+  GitUser:
+    Description: 'The git user name.'
+    Type: String
+    Default: PhillipFitzsimmons
+    AllowedPattern: "^[A-Za-z0-9-]{1,30}"
+    ConstraintDescription: Git user name must be between 1 and 30 characters
+  GitToken:
+    Description: 'The git token valid for pulling from the.'
+    Type: String
+    Default: placeholder
+    AllowedPattern: "^[A-Za-z0-9-]{1,72}"
+    ConstraintDescription: Git token must be between 1 and 72 characters
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Project Configuration
+        Parameters:
+          - Product
+          - Environment
+      - Label:
+          default: Repository Configuration
+        Parameters:
+          - RepositoryType
+          - RepositoryOwner
+          - Repository
+          - Branch
+          - GitUser
+          - GitToken
+    ParameterLabels:
+        Product:
+          default: The name of the product
+        Environment:
+            default: The target deployment environment
+        RepositoryType:
+            default: Git or CodeCommit
+        RepositoryOwner:
+            default: The owner name by which to look up the Git
+        Repository:
+            default: The git or CodeCommit repository
+        Branch:
+            default: The git or CodeCommit branch name
+        GitUser:
+            default: The git or CodeCommit user name
+        GitToken:
+            default: The Git token valid for pulling from the repository
+Resources:
+  ArtifactStore:
+    Type: "AWS::S3::Bucket"
+    Properties: 
+      VersioningConfiguration:
+        Status: Enabled
+  CodePipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn:
+      - CodePipelineServiceRole
+    Properties:
+      ArtifactStore:
+        Location: !Ref ArtifactStore
+        Type: S3
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions: 
+          - Name: Source
+            ActionTypeId: 
+              Category: Source
+              Owner: ThirdParty
+              Provider: GitHub
+              Version: 1
+            RunOrder: 1
+            OutputArtifacts: 
+              - Name: SourceArtifact
+            Configuration: 
+              Branch: master
+              OAuthToken: !Ref GitToken
+              Owner: PhillipFitzsimmons
+              PollForSourceChanges: false
+              Repo: IACAC
+            InputArtifacts: []
+            Region: !Ref AWS::Region
+        - Name: Build
+          Actions: 
+          - Name: Build
+            ActionTypeId: 
+              Category: Build
+              Owner: AWS
+              Provider: CodeBuild
+              Version: 1
+            RunOrder: 1
+            OutputArtifacts: 
+              - Name: BuildArtifact
+            Configuration: 
+              EnvironmentVariables: "[{\"name\":\"PRODUCT\",\"value\":\"iac-product\",\"type\":\"PLAINTEXT\"},{\"name\":\"STAGE\",\"value\":\"stage\",\"type\":\"PLAINTEXT\"}]"
+              ProjectName: "IACAC-CodeBuild"
+            InputArtifacts: 
+              - Name: SourceArtifact
+            Region: !Ref AWS::Region
+        - Name: Deploy
+          Actions: 
+          - Name: Deploy
+            ActionTypeId: 
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            RunOrder: 1
+            OutputArtifacts: []
+            Configuration: 
+              ActionMode: CREATE_UPDATE
+              Capabilities: "CAPABILITY_IAM,CAPABILITY_NAMED_IAM,CAPABILITY_AUTO_EXPAND"
+              RoleArn: !GetAtt CodePipelineServiceRole.Arn
+              StackName: !Sub ${Product}-${Environment}
+              TemplatePath: "BuildArtifact::packaged.yaml"
+            InputArtifacts: 
+              - Name: BuildArtifact
+            Region: !Ref AWS::Region
+
+  CodeBuildStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/wwdd.bucket/codebuild-template.yaml
+      Parameters:
+        Project: !Sub ${Product}-${Environment}
+        Product: !Sub ${Product}
+        Environment: !Sub ${Environment}
+  CodePipelineServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /service-role/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - codepipeline.amazonaws.com
+              - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: pipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - iam:PassRole
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                - codecommit:CancelUploadArchive
+                - codecommit:GetBranch
+                - codecommit:GetCommit
+                - codecommit:GetUploadArchiveStatus
+                - codecommit:UploadArchive
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                - codedeploy:CreateDeployment
+                - codedeploy:GetApplication
+                - codedeploy:GetApplicationRevision
+                - codedeploy:GetDeployment
+                - codedeploy:GetDeploymentConfig
+                - codedeploy:RegisterApplicationRevision
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                - elasticbeanstalk:*
+                - ec2:*
+                - elasticloadbalancing:*
+                - autoscaling:*
+                - cloudwatch:*
+                - s3:*
+                - sns:*
+                - cloudformation:*
+                - rds:*
+                - sqs:*
+                - ecs:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                - lambda:InvokeFunction
+                - lambda:ListFunctions
+                - lambda:PublishLayerVersion
+                - lambda:GetLayerVersion
+                - lambda:DeleteLayerVersion
+                - lambda:CreateFunction
+                - lambda:GetFunction
+                - lambda:GetFunctionConfiguration
+                - lambda:DeleteFunction
+                - lambda:AddPermission
+                - lambda:RemovePermission
+                - lambda:UpdateFunctionConfiguration
+                - lambda:UpdateFunctionCode
+                - lambda:CreateEventSourceMapping
+                - lambda:DeleteEventSourceMapping
+                - lambda:UpdateEventSourceMapping
+                - lambda:GetEventSourceMapping
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                - opsworks:CreateDeployment
+                - opsworks:DescribeApps
+                - opsworks:DescribeCommands
+                - opsworks:DescribeDeployments
+                - opsworks:DescribeInstances
+                - opsworks:DescribeStacks
+                - opsworks:UpdateApp
+                - opsworks:UpdateStack
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                - cloudformation:CreateStack
+                - cloudformation:DeleteStack
+                - cloudformation:DescribeStacks
+                - cloudformation:UpdateStack
+                - cloudformation:CreateChangeSet
+                - cloudformation:DeleteChangeSet
+                - cloudformation:DescribeChangeSet
+                - cloudformation:ExecuteChangeSet
+                - cloudformation:SetStackPolicy
+                - cloudformation:ValidateTemplate
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                - codebuild:BatchGetBuilds
+                - codebuild:StartBuild
+                - codebuild:DeleteProject
+                - codebuild:BatchDeleteBuilds
+                - codebuild:CreateProject
+                - codebuild:ListBuilds
+                - codebuild:ListBuildsForProject
+                - codebuild:ListProjects
+                - codebuild:UpdateProject
+                - codebuild:UpdateProject
+                Resource: "*"
+                Effect: Allow
+              - Effect: Allow
+                Action:
+                - devicefarm:ListProjects
+                - devicefarm:ListDevicePools
+                - devicefarm:GetRun
+                - devicefarm:GetUpload
+                - devicefarm:CreateUpload
+                - devicefarm:ScheduleRun
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                - servicecatalog:ListProvisioningArtifacts
+                - servicecatalog:CreateProvisioningArtifact
+                - servicecatalog:DescribeProvisioningArtifact
+                - servicecatalog:DeleteProvisioningArtifact
+                - servicecatalog:UpdateProduct
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                - cloudformation:ValidateTemplate
+                Resource: "*"
+              #- Effect: Allow
+              #  Action:
+              #  - ecr:DescribeImages
+              #  Resource: "*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:BatchGetItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:ListTables
+                  - dynamodb:DescribeStream
+                  - dynamodb:ListStreams
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:DescribeTable
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeContinuousBackups
+                  - dynamodb:UpdateContinuousBackups
+                  - dynamodb:DescribeTimeToLive
+                  - dynamodb:UpdateTimeToLive
+                Resource: 'arn:aws:dynamodb:eu-west-1:*:*'
+              - Effect: Allow
+                Action:
+                  - iam:GetRolePolicy
+                  - iam:GetRole
+                  - iam:CreateRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:DeleteRole
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DescribeRule
+                  - events:RemoveTargets
+                  - events:DeleteRule
+                  - events:PutTargets
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateDistribution
+                  - cloudfront:ListDistributions
+                  - cloudfront:TagResource
+                  - cloudfront:UpdateDistribution
+                  - cloudfront:DeleteDistribution
+                  - cloudfront:GetDistribution
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - apigateway:*
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - route53:*
+                Resource: '*'
+
+Outputs:
+  Environment:
+    Value: !Ref Environment
+  Project:
+    Value: !Sub ${Product}-${Environment}
+  Product:
+    Value: !Ref Product
