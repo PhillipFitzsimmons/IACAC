@@ -1,0 +1,126 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Shiny template for IAC demo
+
+Parameters:
+  Product:
+    Description: The product name
+    Type: String
+    Default: Shiny
+  Stage:
+    Description: The deployment environment
+    Type: String
+    Default: dev
+
+Globals:
+  Function:
+    Timeout: 18
+    Runtime: nodejs12.x
+    Handler: index.handler
+    Environment:  
+      Variables:
+        PRODUCT:
+          !Sub ${Product}
+
+Resources:
+  ApiGateway:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: IACGateway
+      StageName: !Ref Stage
+      Cors: 
+        AllowOrigin: "'*'"
+        AllowMethods: "'OPTIONS,HEAD,GET,PUT,POST'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+
+  ShinyLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: shiny-lambda/
+      Runtime: nodejs12.x
+      Role: 
+        !GetAtt LambdaExecutionRole.Arn
+      Events:
+        ApiEventSource:
+          Type: Api
+          Properties:
+            Path: /shiny
+            Method: any
+            RestApiId: !Ref ApiGateway
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        !Join [
+          '-',
+          [
+            !Ref 'AWS::StackName',
+            'LambdaExecutionRole'
+          ],
+        ]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - apigateway.amazonaws.com
+                - events.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName:
+            Fn::Join:
+              - '-'
+              - - !Ref AWS::StackName
+                - WriteLogPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 'arn:aws:logs:*:*:log-group:/aws/lambda/*:*:*'
+        - PolicyName:
+            Fn::Join:
+              - '-'
+              - - !Ref AWS::StackName
+                - InvokeTokenLambda
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: '*'
+        - PolicyName:
+            Fn::Join:
+              - '-'
+              - - !Ref AWS::StackName
+                - Iam
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'iam:GetRolePolicy'
+                Resource: '*'
+        - PolicyName:
+            Fn::Join:
+              - '-'
+              - - !Ref AWS::StackName
+                - database
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:*'
+                Resource: '*'
+Outputs:
+  GatewayUrl:
+    Value: !Sub "https://${ApiGateway}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/"
+    Description: API Gateway endpoint URL

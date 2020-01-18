@@ -1,0 +1,25 @@
+# Do not change version. This is the version of aws buildspec, not the version of your buldspec file.
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 10  
+    commands:
+  pre_build:
+    commands:
+      - echo Installing source NPM dependencies...
+      - npm install
+      - npm install unit.js
+  build:
+    commands:
+      - echo Build started on `date`, product:$PRODUCT, stage:$STAGE
+      - echo "{\"Product\":\"$PRODUCT\",\"Stage\":\"$STAGE\"}" > build-artifact.json
+      - aws cloudformation package --template-file template.yaml --s3-bucket $ARTIFACTS_BUCKET --output-template-file packaged.yaml
+  post_build:
+    commands:
+      - echo Build completed on `date`
+artifacts:
+  files:
+    - packaged.yaml
+    - build-artifact.json
