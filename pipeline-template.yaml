@@ -46,7 +46,7 @@ Parameters:
   GitToken:
     Description: 'The git token valid for pulling from the.'
     Type: String
-    Default: placeholder
+    Default: b8aef156baaf66e400d44c716f1a2a7fc4345262
     AllowedPattern: "^[A-Za-z0-9-]{1,72}"
     ConstraintDescription: Git token must be between 1 and 72 characters
 Metadata:
