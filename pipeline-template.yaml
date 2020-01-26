@@ -10,6 +10,7 @@ Parameters:
     Type: String
     AllowedPattern: "^[A-Za-z0-9-]{1,24}"
     ConstraintDescription: Product name must be between 1 and 24 characters
+    Default: CICD-quickstart
   Environment:
     Description: 'The environment is combined with the product name to 
       generate the stack name and subdomain: <product name>-<environment>
@@ -17,6 +18,31 @@ Parameters:
     Type: String
     AllowedPattern: "^[A-Za-z0-9-]{1,10}"
     ConstraintDescription: Environment name must be between 1 and 10 characters
+    Default: dev
+  DeploySwagger:
+    Description: 'Determines if Swagger will be deployed to S3'
+    Type: String
+    Default: false
+    AllowedValues: 
+      - true
+      - false
+    ConstraintDescription: Must be true or false
+  DeployOperationsStack:
+    Description: 'Determines if an operations stack will be deployed to support this stack'
+    Type: String
+    Default: false
+    AllowedValues: 
+      - true
+      - false
+    ConstraintDescription: Must be true or false
+  DeployTestStack:
+    Description: 'Determines if test stack will be deployed to support this stack'
+    Type: String
+    Default: false
+    AllowedValues: 
+      - true
+      - false
+    ConstraintDescription: Must be true or false
   RepositoryType:
     Description: 'CodeCommit or Git'
     Type: String
@@ -46,7 +72,7 @@ Parameters:
   GitToken:
     Description: 'The git token valid for pulling from the.'
     Type: String
-    Default: b8aef156baaf66e400d44c716f1a2a7fc4345262
+    Default: token
     AllowedPattern: "^[A-Za-z0-9-]{1,72}"
     ConstraintDescription: Git token must be between 1 and 72 characters
 Metadata:
@@ -57,6 +83,9 @@ Metadata:
         Parameters:
           - Product
           - Environment
+          - DeploySwagger
+          - DeployOperationsStack
+          - DeployTestStack
       - Label:
           default: Repository Configuration
         Parameters:
@@ -83,6 +112,11 @@ Metadata:
             default: The git or CodeCommit user name
         GitToken:
             default: The Git token valid for pulling from the repository
+Conditions: 
+  DeploySwaggerToS3: !Equals [ !Ref DeploySwagger, true ]
+  DeployOperations: !Equals [ !Ref DeployOperationsStack, true ]
+  DeployTest: !Equals [ !Ref DeployTestStack, true ]
+
 Resources:
   ArtifactStore:
     Type: "AWS::S3::Bucket"
@@ -131,7 +165,7 @@ Resources:
               - Name: BuildArtifact
             Configuration: 
               EnvironmentVariables: "[{\"name\":\"PRODUCT\",\"value\":\"iac-product\",\"type\":\"PLAINTEXT\"},{\"name\":\"STAGE\",\"value\":\"stage\",\"type\":\"PLAINTEXT\"}]"
-              ProjectName: "IACAC-CodeBuild"
+              ProjectName: !Sub ${Product}-${Environment}-CodeBuild
             InputArtifacts: 
               - Name: SourceArtifact
             Region: !Ref AWS::Region
@@ -155,14 +189,47 @@ Resources:
               - Name: BuildArtifact
             Region: !Ref AWS::Region
 
-  CodeBuildStack:
-    Type: AWS::CloudFormation::Stack
+  CodeBuildProject:
+    Type: "AWS::CodeBuild::Project"
+    DependsOn:
+      - CodePipelineServiceRole
     Properties:
-      TemplateURL: https://s3.amazonaws.com/wwdd.bucket/codebuild-template.yaml
-      Parameters:
-        Project: !Sub ${Product}-${Environment}
-        Product: !Sub ${Product}
-        Environment: !Sub ${Environment}
+      Name: !Sub ${Product}-${Environment}-CodeBuild
+      Source: 
+        Type: CODEPIPELINE
+        InsecureSsl: false 
+      Artifacts: 
+        Type: CODEPIPELINE
+        Name: !Sub ${Product}-${Environment}
+        Packaging: NONE
+        EncryptionDisabled: false
+      Cache: 
+        Type: NO_CACHE
+      Environment: 
+        Type: LINUX_CONTAINER
+        Image: "aws/codebuild/amazonlinux2-x86_64-standard:2.0"
+        ComputeType: BUILD_GENERAL1_SMALL
+        EnvironmentVariables:
+        - Type: PLAINTEXT
+          Name: PROJECT
+          Value: !Sub ${Product}-${Environment}
+        - Type: PLAINTEXT
+          Name: ENVIRONMENT
+          Value: !Ref Environment
+        PrivilegedMode: false
+        ImagePullCredentialsType: CODEBUILD
+      ServiceRole: !GetAtt CodePipelineServiceRole.Arn
+      TimeoutInMinutes: 60
+      QueuedTimeoutInMinutes: 480
+      Tags: [] 
+      LogsConfig: 
+        CloudWatchLogs: 
+          Status: ENABLED
+          GroupName: IACAC
+          StreamName: build
+        S3Logs:
+          Status: DISABLED
+          EncryptionDisabled: false
   CodePipelineServiceRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -175,6 +242,7 @@ Resources:
               Service:
               - codepipeline.amazonaws.com
               - cloudformation.amazonaws.com
+              - codebuild.amazonaws.com
             Action:
               - 'sts:AssumeRole'
       Policies:
